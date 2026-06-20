@@ -1,0 +1,395 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Knooppunten</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;overflow:hidden;background:#1a1a1a;color:#fff;font-family:'Helvetica Neue',Helvetica,Arial,sans-serif}
+#map{position:absolute;inset:0;bottom:60px}
+
+/* Route bar */
+#route-bar{
+  position:absolute;bottom:0;left:0;right:0;height:60px;
+  background:rgba(15,15,15,0.97);border-top:1px solid #2a2a2a;
+  display:flex;align-items:center;gap:10px;padding:0 12px;
+  z-index:1000;
+}
+#node-display{
+  display:flex;align-items:center;gap:6px;flex:1;overflow-x:auto;
+  scrollbar-width:none;
+}
+#node-display::-webkit-scrollbar{display:none}
+.node-chip{
+  background:#1d5c2e;border:2px solid #2a8a44;
+  color:#fff;font-size:15px;font-weight:900;
+  padding:5px 11px;border-radius:5px;letter-spacing:0.5px;
+  flex-shrink:0;
+}
+.node-chip.active{background:#2a8a44;box-shadow:0 0 0 2px #5dbf78}
+.node-arrow{color:#444;font-size:14px;flex-shrink:0}
+#btn-undo{
+  background:transparent;border:1px solid #333;color:#888;
+  padding:7px 12px;border-radius:5px;font-size:13px;cursor:pointer;
+  flex-shrink:0;white-space:nowrap;
+}
+#btn-undo:hover{border-color:#666;color:#fff}
+#btn-undo:disabled{opacity:0.25;cursor:not-allowed}
+
+/* Nav bord */
+#nav-board{
+  position:absolute;top:12px;right:12px;z-index:1001;display:none;
+}
+.knooppunt-bord{
+  background:#1d5c2e;border:4px solid #fff;
+  border-radius:8px;padding:10px 14px;min-width:120px;
+  box-shadow:0 4px 20px rgba(0,0,0,0.7);
+}
+.bord-label{font-size:10px;color:#8fc99e;text-transform:uppercase;letter-spacing:1.2px;margin-bottom:2px}
+.bord-nr{font-size:42px;font-weight:900;color:#fff;line-height:1;text-align:center}
+.bord-divider{height:2px;background:rgba(255,255,255,0.2);margin:8px 0}
+.bord-next-row{display:flex;align-items:center;justify-content:space-between;gap:6px}
+.bord-next-nr{font-size:24px;font-weight:900;color:#fff}
+.bord-pijl{font-size:24px;color:#fff;line-height:1}
+.bord-afstand{font-size:11px;color:#8fc99e;text-align:center;margin-top:6px}
+
+/* Locate button */
+#locate-btn{
+  position:absolute;top:12px;left:12px;z-index:1001;
+  background:rgba(15,15,15,0.9);border:1px solid #444;
+  color:#fff;width:40px;height:40px;border-radius:8px;
+  font-size:20px;cursor:pointer;display:flex;align-items:center;justify-content:center;
+  box-shadow:0 2px 8px rgba(0,0,0,0.5);
+}
+#locate-btn:hover{background:rgba(40,40,40,0.95);border-color:#888}
+
+/* Status toast */
+#status{
+  position:absolute;top:12px;left:50%;transform:translateX(-50%);
+  z-index:1002;background:rgba(15,15,15,0.92);border:1px solid #333;
+  border-radius:6px;padding:8px 18px;font-size:13px;color:#ccc;
+  pointer-events:none;transition:opacity 0.4s;white-space:nowrap;
+  box-shadow:0 2px 10px rgba(0,0,0,0.5);
+}
+#status.hidden{opacity:0}
+
+/* Loading overlay */
+#loading{
+  position:absolute;inset:0;background:#1a1a1a;z-index:9999;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;
+}
+#loading.gone{display:none}
+.spinner{
+  width:36px;height:36px;border:3px solid #2a2a2a;
+  border-top-color:#2a8a44;border-radius:50%;animation:spin 0.8s linear infinite;
+}
+@keyframes spin{to{transform:rotate(360deg)}}
+.loading-text{font-size:14px;color:#666}
+
+/* Leaflet dark overrides */
+.leaflet-container{background:#1a1a1a}
+.leaflet-control-zoom a{background:#1a1a1a!important;color:#ccc!important;border-color:#333!important}
+.leaflet-control-zoom a:hover{background:#2a2a2a!important;color:#fff!important}
+.leaflet-control-attribution{background:rgba(15,15,15,0.7)!important;color:#444!important}
+.leaflet-control-attribution a{color:#555!important}
+</style>
+</head>
+<body>
+
+<div id="loading">
+  <div class="spinner"></div>
+  <div class="loading-text">Locatie bepalen...</div>
+</div>
+
+<div id="map"></div>
+
+<button id="locate-btn" onclick="locateUser()" title="Mijn locatie" aria-label="Mijn locatie">⊕</button>
+<div id="status" class="hidden">Laden...</div>
+
+<div id="nav-board">
+  <div class="knooppunt-bord">
+    <div class="bord-label">je bent bij</div>
+    <div class="bord-nr" id="bord-huidig">—</div>
+    <div class="bord-divider"></div>
+    <div class="bord-next-row">
+      <div class="bord-next-nr" id="bord-volgende">—</div>
+      <div class="bord-pijl" id="bord-pijl">→</div>
+    </div>
+    <div class="bord-afstand" id="bord-afstand">volgende knooppunt</div>
+  </div>
+</div>
+
+<div id="route-bar">
+  <div id="node-display">
+    <span style="color:#444;font-size:13px">Selecteer een knooppunt om te starten</span>
+  </div>
+  <button id="btn-undo" onclick="undoLast()" disabled aria-label="Ongedaan maken">↩ Undo</button>
+</div>
+
+<script>
+const map = L.map('map', {
+  zoomControl: false,
+  attributionControl: true
+}).setView([52.1, 5.1], 8);
+
+L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+  attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/">CARTO</a>',
+  subdomains: 'abcd',
+  maxZoom: 19
+}).addTo(map);
+
+L.control.zoom({ position: 'bottomright' }).addTo(map);
+
+let userPos = null;
+let userMarker = null;
+let nodeMarkers = [];
+let routePolylines = [];
+let selectedNodes = [];
+
+// ─── Status ───────────────────────────────────────────────
+function showStatus(msg, autohide = false) {
+  const el = document.getElementById('status');
+  el.textContent = msg;
+  el.classList.remove('hidden');
+  if (autohide) setTimeout(() => el.classList.add('hidden'), 2500);
+}
+function hideStatus() {
+  document.getElementById('status').classList.add('hidden');
+}
+function hideLoading() {
+  document.getElementById('loading').classList.add('gone');
+}
+
+// ─── Locatie ──────────────────────────────────────────────
+function locateUser() {
+  showStatus('Locatie bepalen...');
+  if (!navigator.geolocation) {
+    showStatus('GPS niet beschikbaar — klik op de kaart');
+    hideLoading();
+    map.on('click', onMapClick);
+    return;
+  }
+  navigator.geolocation.getCurrentPosition(
+    pos => {
+      setUserPos([pos.coords.latitude, pos.coords.longitude]);
+    },
+    () => {
+      showStatus('Locatie geweigerd — klik op de kaart');
+      hideLoading();
+      map.on('click', onMapClick);
+    },
+    { enableHighAccuracy: true, timeout: 10000 }
+  );
+}
+
+function onMapClick(e) {
+  map.off('click', onMapClick);
+  setUserPos([e.latlng.lat, e.latlng.lng]);
+}
+
+function setUserPos(latlng) {
+  userPos = latlng;
+  if (userMarker) map.removeLayer(userMarker);
+  userMarker = L.circleMarker(latlng, {
+    radius: 8, fillColor: '#4a9eff', color: '#fff', weight: 2.5, fillOpacity: 1
+  }).addTo(map).bindTooltip('Jouw locatie', { permanent: false });
+  map.setView(latlng, 14);
+  showStatus('Knooppunten laden...');
+  loadNodes(latlng, null).then(hideLoading);
+}
+
+// ─── Knooppunten laden ────────────────────────────────────
+async function loadNodes(center, fromNode) {
+  const [lat, lng] = center;
+  const radius = fromNode ? 8000 : 6000;
+  const query = `[out:json][timeout:25];node["rcn_ref"](around:${radius},${lat},${lng});out body;`;
+
+  try {
+    const res = await fetch('https://overpass-api.de/api/interpreter', {
+      method: 'POST',
+      body: 'data=' + encodeURIComponent(query)
+    });
+    const data = await res.json();
+    clearNodeMarkers();
+
+    const allNodes = data.elements.filter(n => n.tags && n.tags.rcn_ref);
+    const displayNodes = fromNode
+      ? getNearestFrom(fromNode, allNodes, 8)
+      : getNearestFrom({ lat: center[0], lon: center[1] }, allNodes, 8);
+
+    displayNodes.forEach(n => addNodeMarker(n));
+    showStatus(`${displayNodes.length} knooppunten gevonden`, true);
+  } catch (e) {
+    showStatus('Fout bij laden — controleer verbinding', true);
+  }
+}
+
+function getNearestFrom(origin, nodes, count) {
+  return nodes
+    .filter(n => !(origin.id && n.id === origin.id))
+    .map(n => ({ n, d: haversine([origin.lat, origin.lon], [n.lat, n.lon]) }))
+    .sort((a, b) => a.d - b.d)
+    .slice(0, count)
+    .map(x => x.n);
+}
+
+function haversine([lat1, lon1], [lat2, lon2]) {
+  const R = 6371e3;
+  const φ1 = lat1 * Math.PI / 180, φ2 = lat2 * Math.PI / 180;
+  const Δφ = (lat2 - lat1) * Math.PI / 180;
+  const Δλ = (lon2 - lon1) * Math.PI / 180;
+  const a = Math.sin(Δφ / 2) ** 2 + Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+// ─── Markers ──────────────────────────────────────────────
+function addNodeMarker(node) {
+  const nr = node.tags.rcn_ref;
+  const isSelected = selectedNodes.some(s => s.id === node.id);
+  const border = isSelected ? '#5dbf78' : '#ffffff';
+  const bg = isSelected ? '#2a8a44' : '#1d5c2e';
+
+  const icon = L.divIcon({
+    html: `<div style="
+      background:${bg};border:3px solid ${border};border-radius:5px;
+      padding:3px 8px;font-size:15px;font-weight:900;color:#fff;
+      white-space:nowrap;box-shadow:0 2px 8px rgba(0,0,0,0.6);
+      font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;
+      letter-spacing:0.3px;cursor:pointer;
+    ">${nr}</div>`,
+    className: '',
+    iconAnchor: [22, 16]
+  });
+
+  const m = L.marker([node.lat, node.lon], { icon })
+    .addTo(map)
+    .on('click', () => selectNode(node));
+  nodeMarkers.push(m);
+}
+
+function clearNodeMarkers() {
+  nodeMarkers.forEach(m => map.removeLayer(m));
+  nodeMarkers = [];
+}
+
+// ─── Selectie & routing ───────────────────────────────────
+async function selectNode(node) {
+  if (selectedNodes.some(s => s.id === node.id)) return;
+
+  const prev = selectedNodes.length > 0 ? selectedNodes[selectedNodes.length - 1] : null;
+  selectedNodes.push(node);
+  updateRouteBar();
+  document.getElementById('btn-undo').disabled = false;
+
+  if (prev) {
+    showStatus('Route berekenen...');
+    const coords = await fetchRoute(prev, node);
+    if (coords) {
+      const pl = L.polyline(coords, {
+        color: '#5dbf78', weight: 5, opacity: 0.9,
+        lineJoin: 'round', lineCap: 'round'
+      }).addTo(map);
+      routePolylines.push(pl);
+    }
+    hideStatus();
+  }
+
+  updateNavBoard();
+  loadNodes([node.lat, node.lon], node);
+}
+
+async function fetchRoute(from, to) {
+  const url = `https://brouter.de/brouter?lonlats=${from.lon},${from.lat}|${to.lon},${to.lat}&profile=trekking&alternativeidx=0&format=geojson`;
+  try {
+    const res = await fetch(url);
+    const data = await res.json();
+    if (data.features && data.features[0]) {
+      return data.features[0].geometry.coordinates.map(c => [c[1], c[0]]);
+    }
+  } catch (e) {}
+  // Fallback: rechte lijn
+  return [[from.lat, from.lon], [to.lat, to.lon]];
+}
+
+// ─── Undo ─────────────────────────────────────────────────
+function undoLast() {
+  if (selectedNodes.length === 0) return;
+  selectedNodes.pop();
+  if (routePolylines.length > 0) map.removeLayer(routePolylines.pop());
+
+  updateRouteBar();
+  updateNavBoard();
+  document.getElementById('btn-undo').disabled = selectedNodes.length === 0;
+
+  if (selectedNodes.length === 0) {
+    if (userPos) loadNodes(userPos, null);
+  } else {
+    const last = selectedNodes[selectedNodes.length - 1];
+    loadNodes([last.lat, last.lon], last);
+  }
+}
+
+// ─── UI updates ───────────────────────────────────────────
+function updateRouteBar() {
+  const el = document.getElementById('node-display');
+  if (selectedNodes.length === 0) {
+    el.innerHTML = '<span style="color:#444;font-size:13px">Selecteer een knooppunt om te starten</span>';
+    return;
+  }
+  let html = '';
+  selectedNodes.forEach((n, i) => {
+    const nr = n.tags.rcn_ref;
+    const isLast = i === selectedNodes.length - 1;
+    html += `<span class="node-chip${isLast ? ' active' : ''}">${nr}</span>`;
+    if (!isLast) html += `<span class="node-arrow">›</span>`;
+  });
+  el.innerHTML = html;
+  // Scroll naar einde
+  el.scrollLeft = el.scrollWidth;
+}
+
+function getBearing(from, to) {
+  const φ1 = from.lat * Math.PI / 180, φ2 = to.lat * Math.PI / 180;
+  const Δλ = (to.lon - from.lon) * Math.PI / 180;
+  const y = Math.sin(Δλ) * Math.cos(φ2);
+  const x = Math.cos(φ1) * Math.sin(φ2) - Math.sin(φ1) * Math.cos(φ2) * Math.cos(Δλ);
+  return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
+}
+
+function bearingToArrow(deg) {
+  const arrows = ['↑', '↗', '→', '↘', '↓', '↙', '←', '↖'];
+  return arrows[Math.round(deg / 45) % 8];
+}
+
+function updateNavBoard() {
+  const board = document.getElementById('nav-board');
+  if (selectedNodes.length < 1) { board.style.display = 'none'; return; }
+  board.style.display = 'block';
+
+  const current = selectedNodes[selectedNodes.length - 1];
+  const prev = selectedNodes.length >= 2 ? selectedNodes[selectedNodes.length - 2] : null;
+  document.getElementById('bord-huidig').textContent = current.tags.rcn_ref;
+
+  if (prev) {
+    const bearing = getBearing(prev, current);
+    document.getElementById('bord-volgende').textContent = current.tags.rcn_ref;
+    document.getElementById('bord-pijl').textContent = bearingToArrow(bearing);
+    const d = Math.round(haversine([prev.lat, prev.lon], [current.lat, current.lon]));
+    document.getElementById('bord-afstand').textContent = d >= 1000
+      ? (d / 1000).toFixed(1) + ' km'
+      : d + ' m';
+  } else {
+    document.getElementById('bord-volgende').textContent = '?';
+    document.getElementById('bord-pijl').textContent = '→';
+    document.getElementById('bord-afstand').textContent = 'selecteer volgend punt';
+  }
+}
+
+// ─── Start ────────────────────────────────────────────────
+locateUser();
+</script>
+</body>
+</html>
