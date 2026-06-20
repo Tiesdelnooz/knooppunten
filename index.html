@@ -145,9 +145,16 @@ L.control.zoom({ position: 'bottomright' }).addTo(map);
 
 let userPos = null;
 let userMarker = null;
-let nodeMarkers = [];
 let routePolylines = [];
 let selectedNodes = [];
+
+const SEARCH_RADIUS = 5000; // vaste straal in meters
+const CELL_SIZE = 0.025;    // ~2.5km grid-cellen voor cache-tracking
+
+// Cache: knooppunten by id -> { node, marker }
+const nodeCache = new Map();
+// Set van reeds opgehaalde grid-cellen ("latIdx,lonIdx")
+const fetchedCells = new Set();
 
 // ─── Status ───────────────────────────────────────────────
 function showStatus(msg, autohide = false) {
@@ -198,14 +205,56 @@ function setUserPos(latlng) {
   }).addTo(map).bindTooltip('Jouw locatie', { permanent: false });
   map.setView(latlng, 14);
   showStatus('Knooppunten laden...');
-  loadNodes(latlng, null).then(hideLoading);
+  loadNodesAround(latlng).then(hideLoading);
 }
 
-// ─── Knooppunten laden ────────────────────────────────────
-async function loadNodes(center, fromNode) {
-  const [lat, lng] = center;
-  const radius = fromNode ? 8000 : 6000;
-  const query = `[out:json][timeout:25];node["rcn_ref"](around:${radius},${lat},${lng});out body;`;
+// ─── Knooppunten laden (met grid-cache, incrementeel) ─────
+function cellKey(lat, lon) {
+  const latIdx = Math.floor(lat / CELL_SIZE);
+  const lonIdx = Math.floor(lon / CELL_SIZE);
+  return `${latIdx},${lonIdx}`;
+}
+
+// Bepaal welke grid-cellen binnen de straal van center liggen
+function cellsInRadius(center, radiusMeters) {
+  const [lat, lon] = center;
+  // graden-marge: ruim genoeg, iets extra voor veiligheid
+  const latMargin = (radiusMeters / 111320) * 1.15;
+  const lonMargin = (radiusMeters / (111320 * Math.cos(lat * Math.PI / 180))) * 1.15;
+
+  const cells = [];
+  for (let la = lat - latMargin; la <= lat + latMargin; la += CELL_SIZE) {
+    for (let lo = lon - lonMargin; lo <= lon + lonMargin; lo += CELL_SIZE) {
+      // alleen cellen waarvan het middelpunt echt binnen de straal valt
+      if (haversine(center, [la + CELL_SIZE / 2, lo + CELL_SIZE / 2]) <= radiusMeters) {
+        cells.push({ key: cellKey(la + CELL_SIZE / 2, lo + CELL_SIZE / 2), lat: la, lon: lo });
+      }
+    }
+  }
+  return cells;
+}
+
+async function loadNodesAround(center) {
+  const needed = cellsInRadius(center, SEARCH_RADIUS).filter(c => !fetchedCells.has(c.key));
+
+  // Alles al in cache? Dan alleen renderen, geen fetch nodig
+  if (needed.length === 0) {
+    renderVisibleNodes(center);
+    showStatus('Knooppunten geladen (uit cache)', true);
+    return;
+  }
+
+  showStatus(`${needed.length} nieuwe gebieden laden...`);
+
+  // Bouw één Overpass-query met losse bounding boxes per ontbrekende cel,
+  // zo halen we alleen het écht ontbrekende gebied op (incrementeel).
+  const boxes = needed.map(c => {
+    const s = c.lat, n = c.lat + CELL_SIZE;
+    const w = c.lon, e = c.lon + CELL_SIZE;
+    return `node["rcn_ref"](${s},${w},${n},${e});`;
+  }).join('');
+
+  const query = `[out:json][timeout:25];(${boxes});out body;`;
 
   try {
     const res = await fetch('https://overpass-api.de/api/interpreter', {
@@ -213,27 +262,41 @@ async function loadNodes(center, fromNode) {
       body: 'data=' + encodeURIComponent(query)
     });
     const data = await res.json();
-    clearNodeMarkers();
 
-    const allNodes = data.elements.filter(n => n.tags && n.tags.rcn_ref);
-    const displayNodes = fromNode
-      ? getNearestFrom(fromNode, allNodes, 8)
-      : getNearestFrom({ lat: center[0], lon: center[1] }, allNodes, 8);
+    data.elements.forEach(n => {
+      if (n.tags && n.tags.rcn_ref && !nodeCache.has(n.id)) {
+        nodeCache.set(n.id, { node: n, marker: null });
+      }
+    });
 
-    displayNodes.forEach(n => addNodeMarker(n));
-    showStatus(`${displayNodes.length} knooppunten gevonden`, true);
+    needed.forEach(c => fetchedCells.add(c.key));
+    renderVisibleNodes(center);
+    showStatus(`${data.elements.length} knooppunten erbij geladen`, true);
   } catch (e) {
     showStatus('Fout bij laden — controleer verbinding', true);
   }
 }
 
-function getNearestFrom(origin, nodes, count) {
-  return nodes
-    .filter(n => !(origin.id && n.id === origin.id))
-    .map(n => ({ n, d: haversine([origin.lat, origin.lon], [n.lat, n.lon]) }))
-    .sort((a, b) => a.d - b.d)
-    .slice(0, count)
-    .map(x => x.n);
+// Toon alle gecachte knooppunten binnen de straal rond center,
+// plus alle reeds geselecteerde knooppunten (blijven altijd zichtbaar).
+function renderVisibleNodes(center) {
+  nodeCache.forEach(entry => {
+    const n = entry.node;
+    const withinRadius = haversine(center, [n.lat, n.lon]) <= SEARCH_RADIUS;
+    const isSelected = selectedNodes.some(s => s.id === n.id);
+
+    if (withinRadius || isSelected) {
+      if (!entry.marker) {
+        entry.marker = createNodeMarker(n);
+      } else {
+        updateMarkerStyle(entry.marker, n.id);
+      }
+    } else if (entry.marker) {
+      // Buiten straal én niet geselecteerd: marker weghalen (blijft in cache)
+      map.removeLayer(entry.marker);
+      entry.marker = null;
+    }
+  });
 }
 
 function haversine([lat1, lon1], [lat2, lon2]) {
@@ -246,33 +309,47 @@ function haversine([lat1, lon1], [lat2, lon2]) {
 }
 
 // ─── Markers ──────────────────────────────────────────────
-function addNodeMarker(node) {
-  const nr = node.tags.rcn_ref;
-  const isSelected = selectedNodes.some(s => s.id === node.id);
+function markerHtml(nr, isSelected) {
   const border = isSelected ? '#5dbf78' : '#ffffff';
   const bg = isSelected ? '#2a8a44' : '#1d5c2e';
+  return `<div style="
+    background:${bg};border:3px solid ${border};border-radius:5px;
+    padding:3px 8px;font-size:15px;font-weight:900;color:#fff;
+    white-space:nowrap;box-shadow:0 2px 8px rgba(0,0,0,0.6);
+    font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;
+    letter-spacing:0.3px;cursor:pointer;
+  ">${nr}</div>`;
+}
 
+function createNodeMarker(node) {
+  const nr = node.tags.rcn_ref;
+  const isSelected = selectedNodes.some(s => s.id === node.id);
   const icon = L.divIcon({
-    html: `<div style="
-      background:${bg};border:3px solid ${border};border-radius:5px;
-      padding:3px 8px;font-size:15px;font-weight:900;color:#fff;
-      white-space:nowrap;box-shadow:0 2px 8px rgba(0,0,0,0.6);
-      font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;
-      letter-spacing:0.3px;cursor:pointer;
-    ">${nr}</div>`,
+    html: markerHtml(nr, isSelected),
     className: '',
     iconAnchor: [22, 16]
   });
-
-  const m = L.marker([node.lat, node.lon], { icon })
+  return L.marker([node.lat, node.lon], { icon })
     .addTo(map)
     .on('click', () => selectNode(node));
-  nodeMarkers.push(m);
 }
 
-function clearNodeMarkers() {
-  nodeMarkers.forEach(m => map.removeLayer(m));
-  nodeMarkers = [];
+function updateMarkerStyle(marker, nodeId) {
+  const entry = nodeCache.get(nodeId);
+  if (!entry) return;
+  const nr = entry.node.tags.rcn_ref;
+  const isSelected = selectedNodes.some(s => s.id === nodeId);
+  marker.setIcon(L.divIcon({
+    html: markerHtml(nr, isSelected),
+    className: '',
+    iconAnchor: [22, 16]
+  }));
+}
+
+function refreshAllMarkerStyles() {
+  nodeCache.forEach((entry, id) => {
+    if (entry.marker) updateMarkerStyle(entry.marker, id);
+  });
 }
 
 // ─── Selectie & routing ───────────────────────────────────
@@ -282,6 +359,7 @@ async function selectNode(node) {
   const prev = selectedNodes.length > 0 ? selectedNodes[selectedNodes.length - 1] : null;
   selectedNodes.push(node);
   updateRouteBar();
+  refreshAllMarkerStyles();
   document.getElementById('btn-undo').disabled = false;
 
   if (prev) {
@@ -298,7 +376,7 @@ async function selectNode(node) {
   }
 
   updateNavBoard();
-  loadNodes([node.lat, node.lon], node);
+  await loadNodesAround([node.lat, node.lon]);
 }
 
 async function fetchRoute(from, to) {
@@ -322,14 +400,14 @@ function undoLast() {
 
   updateRouteBar();
   updateNavBoard();
+  refreshAllMarkerStyles();
   document.getElementById('btn-undo').disabled = selectedNodes.length === 0;
 
-  if (selectedNodes.length === 0) {
-    if (userPos) loadNodes(userPos, null);
-  } else {
-    const last = selectedNodes[selectedNodes.length - 1];
-    loadNodes([last.lat, last.lon], last);
-  }
+  const center = selectedNodes.length === 0
+    ? userPos
+    : [selectedNodes[selectedNodes.length - 1].lat, selectedNodes[selectedNodes.length - 1].lon];
+
+  if (center) loadNodesAround(center);
 }
 
 // ─── UI updates ───────────────────────────────────────────
