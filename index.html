@@ -171,7 +171,17 @@ html,body{
   background:rgba(248,250,248,0.85)!important;
   color:var(--gray)!important;font-size:10px!important;
 }
-.leaflet-control-attribution a{color:var(--gray)!important}
+.leaflet-control-scale-line{
+  background:rgba(248,250,248,0.9)!important;
+  border:1.5px solid var(--dark)!important;
+  border-top:none!important;
+  color:var(--dark)!important;
+  font-family:'Afacad Flux',sans-serif!important;
+  font-size:11px!important;font-weight:700!important;
+  padding:2px 5px!important;
+  border-radius:0 0 4px 4px!important;
+  box-shadow:0 1px 4px rgba(0,0,0,0.15)!important;
+}
 </style>
 </head>
 <body>
@@ -229,6 +239,7 @@ L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r
 }).addTo(map);
 
 L.control.zoom({ position: 'bottomright' }).addTo(map);
+L.control.scale({ position: 'bottomright', imperial: false, maxWidth: 100 }).addTo(map);
 
 // Kaart bewogen → "Search this area" tonen
 map.on('moveend', () => {
@@ -289,7 +300,14 @@ function hideSearchBtn() {
 function searchThisArea() {
   hideSearchBtn();
   const center = map.getCenter();
-  loadNodesAround([center.lat, center.lng]);
+  // Bereken radius als helft van de zichtbare kaartbreedte
+  const bounds = map.getBounds();
+  const mapWidthMeters = haversine(
+    [bounds.getNorth(), bounds.getWest()],
+    [bounds.getNorth(), bounds.getEast()]
+  );
+  const dynamicRadius = Math.round(mapWidthMeters / 2);
+  loadNodesAround([center.lat, center.lng], dynamicRadius);
 }
 
 // ─── Locatie ──────────────────────────────────────────────
@@ -358,11 +376,11 @@ function cellsInRadius(center, radiusMeters) {
   return cells;
 }
 
-async function loadNodesAround(center) {
-  const needed = cellsInRadius(center, SEARCH_RADIUS).filter(c => !fetchedCells.has(c.key));
+async function loadNodesAround(center, radius = SEARCH_RADIUS) {
+  const needed = cellsInRadius(center, radius).filter(c => !fetchedCells.has(c.key));
 
   if (needed.length === 0) {
-    renderVisibleNodes(center);
+    renderVisibleNodes(center, radius);
     return;
   }
 
@@ -383,14 +401,36 @@ async function loadNodesAround(center) {
     });
     const data = await res.json();
 
+    // Deduplicatie: per rcn_ref, sla nodes op die te dicht bij een al-bekende liggen
+    const seenByRef = new Map(); // rcn_ref -> [{ lat, lon }]
+    const DEDUP_RADIUS = 100; // meter
+
+    // Vul eerst in met wat al in cache zit
+    nodeCache.forEach(entry => {
+      const ref = entry.node.tags.rcn_ref;
+      if (!seenByRef.has(ref)) seenByRef.set(ref, []);
+      seenByRef.get(ref).push({ lat: entry.node.lat, lon: entry.node.lon });
+    });
+
     data.elements.forEach(n => {
-      if (n.tags && n.tags.rcn_ref && !nodeCache.has(n.id)) {
+      if (!n.tags || !n.tags.rcn_ref) return;
+      if (nodeCache.has(n.id)) return;
+
+      const ref = n.tags.rcn_ref;
+      const existing = seenByRef.get(ref) || [];
+      const isDuplicate = existing.some(e =>
+        haversine([e.lat, e.lon], [n.lat, n.lon]) <= DEDUP_RADIUS
+      );
+
+      if (!isDuplicate) {
         nodeCache.set(n.id, { node: n, marker: null });
+        existing.push({ lat: n.lat, lon: n.lon });
+        seenByRef.set(ref, existing);
       }
     });
 
     needed.forEach(c => fetchedCells.add(c.key));
-    renderVisibleNodes(center);
+    renderVisibleNodes(center, radius);
   } catch (e) {
     showStatus('Fout bij laden — controleer verbinding', true);
   } finally {
@@ -400,10 +440,10 @@ async function loadNodesAround(center) {
 
 // Toon alle gecachte knooppunten binnen de straal rond center,
 // plus alle reeds geselecteerde knooppunten (blijven altijd zichtbaar).
-function renderVisibleNodes(center) {
+function renderVisibleNodes(center, radius = SEARCH_RADIUS) {
   nodeCache.forEach(entry => {
     const n = entry.node;
-    const withinRadius = haversine(center, [n.lat, n.lon]) <= SEARCH_RADIUS;
+    const withinRadius = haversine(center, [n.lat, n.lon]) <= radius;
     const isSelected = selectedNodes.some(s => s.id === n.id);
 
     if (withinRadius || isSelected) {
