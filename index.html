@@ -5,7 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>Knooppunten</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css"/>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Afacad+Flux:wght@400;600;700;900&display=swap" rel="stylesheet">
@@ -182,6 +184,25 @@ html,body{
   border-radius:0 0 4px 4px!important;
   box-shadow:0 1px 4px rgba(0,0,0,0.15)!important;
 }
+
+/* ── Cluster markers ───────────────────────────────────── */
+.cluster-pill{
+  background:var(--dark);
+  border:2px solid var(--orange);
+  border-radius:999px;
+  color:var(--orange);
+  font-family:'Afacad Flux',sans-serif;
+  font-size:13px;font-weight:700;
+  padding:4px 10px;
+  white-space:nowrap;
+  box-shadow:0 2px 8px rgba(0,0,0,0.28);
+  display:inline-flex;align-items:center;gap:3px;
+  cursor:pointer;
+  line-height:1;
+}
+/* Verberg de standaard markercluster achtergrond */
+.marker-cluster { background:transparent !important; box-shadow:none !important; }
+.marker-cluster div { display:none !important; }
 </style>
 </head>
 <body>
@@ -255,13 +276,33 @@ let userMarker = null;
 let routePolylines = [];
 let selectedNodes = [];
 
-const SEARCH_RADIUS = 5000; // vaste straal in meters
-const CELL_SIZE = 0.025;    // ~2.5km grid-cellen voor cache-tracking
+// ─── Cluster groep ────────────────────────────────────────
+function roundedCount(n) {
+  if (n < 10)  return `${n}`;
+  if (n < 20)  return '10+';
+  if (n < 50)  return '20+';
+  if (n < 100) return '50+';
+  return '100+';
+}
 
-// Cache: knooppunten by id -> { node, marker }
-const nodeCache = new Map();
-// Set van reeds opgehaalde grid-cellen ("latIdx,lonIdx")
-const fetchedCells = new Set();
+const clusterGroup = L.markerClusterGroup({
+  // Geen vast zoomniveau — clustering op basis van pixel-afstand (dichtheid)
+  disableClusteringAtZoom: null,
+  maxClusterRadius: 60, // pixels; kleiner = eerder splitsen
+  spiderfyOnMaxZoom: false,
+  showCoverageOnHover: false,
+  zoomToBoundsOnClick: true,
+  iconCreateFunction(cluster) {
+    const count = cluster.getChildCount();
+    const label = roundedCount(count);
+    return L.divIcon({
+      html: `<div class="cluster-pill">⬡ ${label}</div>`,
+      className: '',
+      iconAnchor: [0, 0],
+    });
+  }
+});
+clusterGroup.addTo(map);
 
 // ─── Status ───────────────────────────────────────────────
 function showStatus(msg, autohide = false) {
@@ -297,19 +338,6 @@ function hideSearchBtn() {
   mapMoved = false;
 }
 
-function searchThisArea() {
-  hideSearchBtn();
-  const center = map.getCenter();
-  // Bereken radius als helft van de zichtbare kaartbreedte
-  const bounds = map.getBounds();
-  const mapWidthMeters = haversine(
-    [bounds.getNorth(), bounds.getWest()],
-    [bounds.getNorth(), bounds.getEast()]
-  );
-  const dynamicRadius = Math.round(mapWidthMeters / 2);
-  loadNodesAround([center.lat, center.lng], dynamicRadius);
-}
-
 // ─── Locatie ──────────────────────────────────────────────
 function locateUser() {
   showStatus('Locatie bepalen...');
@@ -343,105 +371,68 @@ function setUserPos(latlng) {
   userMarker = L.circleMarker(latlng, {
     radius: 10, fillColor: '#FF7A00', color: '#F8FAF8', weight: 3, fillOpacity: 1
   }).addTo(map).bindTooltip('Jouw locatie', { permanent: false });
-  // Tijdelijk moveend blokkeren tijdens initieel zoomen
   mapMoved = false;
   hideSearchBtn();
   map.setView(latlng, 14);
-  loadNodesAround(latlng).then(hideLoading);
+  // Render direct als data al klaar is; anders doet loadAllNodes().then() het
+  if (nodesReady) loadNodesAround(latlng);
+  hideLoading();
 }
 
-// ─── Knooppunten laden (met grid-cache, incrementeel) ─────
-function cellKey(lat, lon) {
-  const latIdx = Math.floor(lat / CELL_SIZE);
-  const lonIdx = Math.floor(lon / CELL_SIZE);
-  return `${latIdx},${lonIdx}`;
-}
+const SEARCH_RADIUS = 5000;
 
-// Bepaal welke grid-cellen binnen de straal van center liggen
-function cellsInRadius(center, radiusMeters) {
-  const [lat, lon] = center;
-  // graden-marge: ruim genoeg, iets extra voor veiligheid
-  const latMargin = (radiusMeters / 111320) * 1.15;
-  const lonMargin = (radiusMeters / (111320 * Math.cos(lat * Math.PI / 180))) * 1.15;
+// nodeCache: id -> { node: {id, lat, lon, ref}, marker: L.Marker|null }
+const nodeCache = new Map();
+let nodesReady = false;
 
-  const cells = [];
-  for (let la = lat - latMargin; la <= lat + latMargin; la += CELL_SIZE) {
-    for (let lo = lon - lonMargin; lo <= lon + lonMargin; lo += CELL_SIZE) {
-      // alleen cellen waarvan het middelpunt echt binnen de straal valt
-      if (haversine(center, [la + CELL_SIZE / 2, lo + CELL_SIZE / 2]) <= radiusMeters) {
-        cells.push({ key: cellKey(la + CELL_SIZE / 2, lo + CELL_SIZE / 2), lat: la, lon: lo });
-      }
-    }
-  }
-  return cells;
-}
-
-async function loadNodesAround(center, radius = SEARCH_RADIUS) {
-  const needed = cellsInRadius(center, radius).filter(c => !fetchedCells.has(c.key));
-
-  if (needed.length === 0) {
-    renderVisibleNodes(center, radius);
-    return;
-  }
-
-  showAreaLoading('Checking the area...');
-
-  const boxes = needed.map(c => {
-    const s = c.lat, n = c.lat + CELL_SIZE;
-    const w = c.lon, e = c.lon + CELL_SIZE;
-    return `node["rcn_ref"](${s},${w},${n},${e});`;
-  }).join('');
-
-  const query = `[out:json][timeout:25];(${boxes});out body;`;
-
+// ─── Data laden uit nodes.json ────────────────────────────
+async function loadAllNodes() {
+  showAreaLoading('Nederland laden...');
   try {
-    const res = await fetch('https://overpass-api.de/api/interpreter', {
-      method: 'POST',
-      body: 'data=' + encodeURIComponent(query)
-    });
+    const res = await fetch('./nodes.json');
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
 
-    // Deduplicatie: per rcn_ref, sla nodes op die te dicht bij een al-bekende liggen
-    const seenByRef = new Map(); // rcn_ref -> [{ lat, lon }]
-    const DEDUP_RADIUS = 100; // meter
-
-    // Vul eerst in met wat al in cache zit
-    nodeCache.forEach(entry => {
-      const ref = entry.node.tags.rcn_ref;
-      if (!seenByRef.has(ref)) seenByRef.set(ref, []);
-      seenByRef.get(ref).push({ lat: entry.node.lat, lon: entry.node.lon });
+    data.nodes.forEach(n => {
+      // Normaliseer naar hetzelfde formaat als de rest van de app verwacht
+      nodeCache.set(n.id, {
+        node: { id: n.id, lat: n.lat, lon: n.lon, tags: { rcn_ref: n.ref } },
+        marker: null
+      });
     });
 
-    data.elements.forEach(n => {
-      if (!n.tags || !n.tags.rcn_ref) return;
-      if (nodeCache.has(n.id)) return;
-
-      const ref = n.tags.rcn_ref;
-      const existing = seenByRef.get(ref) || [];
-      const isDuplicate = existing.some(e =>
-        haversine([e.lat, e.lon], [n.lat, n.lon]) <= DEDUP_RADIUS
-      );
-
-      if (!isDuplicate) {
-        nodeCache.set(n.id, { node: n, marker: null });
-        existing.push({ lat: n.lat, lon: n.lon });
-        seenByRef.set(ref, existing);
-      }
-    });
-
-    needed.forEach(c => fetchedCells.add(c.key));
-    renderVisibleNodes(center, radius);
+    nodesReady = true;
+    const date = new Date(data.generated).toLocaleDateString('nl-NL');
+    console.log(`${data.count} knooppunten geladen (gegenereerd: ${date})`);
   } catch (e) {
-    showStatus('Fout bij laden — controleer verbinding', true);
+    showStatus('nodes.json niet gevonden — zet het bestand naast index.html', true);
+    console.error(e);
   } finally {
     hideAreaLoading();
   }
 }
 
-// Toon alle gecachte knooppunten binnen de straal rond center,
-// plus alle reeds geselecteerde knooppunten (blijven altijd zichtbaar).
+// ─── Knooppunten tonen rond een punt ─────────────────────
+function loadNodesAround(center, radius = SEARCH_RADIUS) {
+  if (!nodesReady) return;
+  renderVisibleNodes(center, radius);
+}
+
+function searchThisArea() {
+  hideSearchBtn();
+  const center = map.getCenter();
+  const bounds = map.getBounds();
+  const mapWidthMeters = haversine(
+    [bounds.getNorth(), bounds.getWest()],
+    [bounds.getNorth(), bounds.getEast()]
+  );
+  const dynamicRadius = Math.round(mapWidthMeters / 2);
+  loadNodesAround([center.lat, center.lng], dynamicRadius);
+}
+
+// Toon markers binnen radius; verberg markers buiten radius (blijven in nodeCache)
 function renderVisibleNodes(center, radius = SEARCH_RADIUS) {
-  nodeCache.forEach(entry => {
+  nodeCache.forEach((entry, id) => {
     const n = entry.node;
     const withinRadius = haversine(center, [n.lat, n.lon]) <= radius;
     const isSelected = selectedNodes.some(s => s.id === n.id);
@@ -450,11 +441,10 @@ function renderVisibleNodes(center, radius = SEARCH_RADIUS) {
       if (!entry.marker) {
         entry.marker = createNodeMarker(n);
       } else {
-        updateMarkerStyle(entry.marker, n.id);
+        updateMarkerStyle(entry.marker, id);
       }
     } else if (entry.marker) {
-      // Buiten straal én niet geselecteerd: marker weghalen (blijft in cache)
-      map.removeLayer(entry.marker);
+      clusterGroup.removeLayer(entry.marker);
       entry.marker = null;
     }
   });
@@ -503,9 +493,10 @@ function createNodeMarker(node) {
     iconAnchor: [26, 26],
     iconSize: [52, 52]
   });
-  return L.marker([node.lat, node.lon], { icon })
-    .addTo(map)
+  const m = L.marker([node.lat, node.lon], { icon })
     .on('click', () => selectNode(node));
+  clusterGroup.addLayer(m);
+  return m;
 }
 
 function updateMarkerStyle(marker, nodeId) {
@@ -642,6 +633,11 @@ function updateNavBoard() {
 }
 
 // ─── Start ────────────────────────────────────────────────
+// Laad nodes.json en bepaal locatie parallel;
+// renderVisibleNodes wacht op nodesReady via loadNodesAround guard.
+loadAllNodes().then(() => {
+  if (userPos) loadNodesAround(userPos);
+});
 locateUser();
 </script>
 </body>
