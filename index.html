@@ -266,18 +266,37 @@ async function loadEdges() {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
 
-    // Bouw één Leaflet-laag met alle trajecten
-    edgeLayer = L.layerGroup(
-      data.edges.map(e =>
-        L.polyline(e.coords, {
+    const scale = data.scale || 10000;
+    const polylines = [];
+
+    for (const edge of data.edges) {
+      let coords;
+      if (data.delta) {
+        // Delta-decoding: eerste twee waarden zijn absolute coördinaat,
+        // daarna paren van verschillen optellen
+        coords = [];
+        let lat = edge[0] / scale;
+        let lon = edge[1] / scale;
+        coords.push([lat, lon]);
+        for (let i = 2; i < edge.length; i += 2) {
+          lat += edge[i]     / scale;
+          lon += edge[i + 1] / scale;
+          coords.push([lat, lon]);
+        }
+      } else {
+        coords = edge.coords || edge;
+      }
+      polylines.push(
+        L.polyline(coords, {
           color: '#F8FAF8',
           weight: 1.5,
           opacity: 0.7,
-          interactive: false   // klikken gaat door naar de kaart/markers
+          interactive: false
         })
-      )
-    );
+      );
+    }
 
+    edgeLayer = L.layerGroup(polylines);
     edgesLoaded = true;
     console.log(`${data.count} trajecten geladen`);
     updateEdgeVisibility();
