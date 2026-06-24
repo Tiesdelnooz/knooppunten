@@ -255,6 +255,53 @@ const clusterGroup = L.markerClusterGroup({
 });
 clusterGroup.addTo(map);
 
+// ─── Traject-laag (edges) ─────────────────────────────────
+const EDGE_ZOOM_THRESHOLD = 13;
+let edgeLayer = null;
+let edgesLoaded = false;
+
+async function loadEdges() {
+  try {
+    const res = await fetch('./edges.json');
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+
+    // Bouw één Leaflet-laag met alle trajecten
+    edgeLayer = L.layerGroup(
+      data.edges.map(e =>
+        L.polyline(e.coords, {
+          color: '#F8FAF8',
+          weight: 1.5,
+          opacity: 0.7,
+          interactive: false   // klikken gaat door naar de kaart/markers
+        })
+      )
+    );
+
+    edgesLoaded = true;
+    console.log(`${data.count} trajecten geladen`);
+    updateEdgeVisibility();
+  } catch (e) {
+    console.warn('edges.json niet gevonden — trajecten niet beschikbaar');
+  }
+}
+
+function updateEdgeVisibility() {
+  if (!edgesLoaded || !edgeLayer) return;
+  const zoom = map.getZoom();
+  if (zoom >= EDGE_ZOOM_THRESHOLD) {
+    if (!map.hasLayer(edgeLayer)) {
+      edgeLayer.addTo(map);
+      // Zorg dat de edge-laag onder de clusterGroup blijft
+      edgeLayer.getPane && edgeLayer.eachLayer(l => l.bringToBack?.());
+    }
+  } else {
+    if (map.hasLayer(edgeLayer)) map.removeLayer(edgeLayer);
+  }
+}
+
+map.on('zoomend', updateEdgeVisibility);
+
 // ─── Status ───────────────────────────────────────────────
 function showStatus(msg, autohide = false) {
   const el = document.getElementById('status');
@@ -527,6 +574,7 @@ function updateNavBoard() {
 
 // ─── Start ────────────────────────────────────────────────
 loadAllNodes();
+loadEdges();
 locateUser();
 </script>
 </body>
