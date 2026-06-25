@@ -267,41 +267,42 @@ async function loadEdges() {
     const data = await res.json();
 
     const scale = data.scale || 10000;
-    const polylines = [];
+
+    // Decodeer alle edges en voeg samen tot één grote array
+    // met null als separator tussen segmenten — dit is één SVG-pad
+    // in de DOM i.p.v. 196.000 losse elementen.
+    const allCoords = [];
 
     for (const edge of data.edges) {
-      let coords;
       if (data.delta) {
-        // Delta-decoding: eerste twee waarden zijn absolute coördinaat,
-        // daarna paren van verschillen optellen
-        coords = [];
         let lat = edge[0] / scale;
         let lon = edge[1] / scale;
-        coords.push([lat, lon]);
+        allCoords.push([lat, lon]);
         for (let i = 2; i < edge.length; i += 2) {
           lat += edge[i]     / scale;
           lon += edge[i + 1] / scale;
-          coords.push([lat, lon]);
+          allCoords.push([lat, lon]);
         }
       } else {
-        coords = edge.coords || edge;
+        for (const p of (edge.coords || edge)) {
+          allCoords.push([p[0], p[1]]);
+        }
       }
-      polylines.push(
-        L.polyline(coords, {
-          color: '#F8FAF8',
-          weight: 1.5,
-          opacity: 0.7,
-          interactive: false
-        })
-      );
+      allCoords.push(null); // scheidt segmenten
     }
 
-    edgeLayer = L.layerGroup(polylines);
+    edgeLayer = L.polyline(allCoords, {
+      color: '#F8FAF8',
+      weight: 1.5,
+      opacity: 0.8,
+      interactive: false
+    });
+
     edgesLoaded = true;
     console.log(`${data.count} trajecten geladen`);
     updateEdgeVisibility();
   } catch (e) {
-    console.warn('edges.json niet gevonden — trajecten niet beschikbaar');
+    console.warn('edges.json fout:', e.message);
   }
 }
 
@@ -311,8 +312,7 @@ function updateEdgeVisibility() {
   if (zoom >= EDGE_ZOOM_THRESHOLD) {
     if (!map.hasLayer(edgeLayer)) {
       edgeLayer.addTo(map);
-      // Zorg dat de edge-laag onder de clusterGroup blijft
-      edgeLayer.getPane && edgeLayer.eachLayer(l => l.bringToBack?.());
+      edgeLayer.bringToBack();
     }
   } else {
     if (map.hasLayer(edgeLayer)) map.removeLayer(edgeLayer);
