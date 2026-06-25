@@ -255,72 +255,6 @@ const clusterGroup = L.markerClusterGroup({
 });
 clusterGroup.addTo(map);
 
-// ─── Traject-laag (edges) ─────────────────────────────────
-const EDGE_ZOOM_THRESHOLD = 13;
-let edgeLayer = null;
-let edgesLoaded = false;
-
-async function loadEdges() {
-  try {
-    const res = await fetch('./edges.json');
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json();
-
-    const scale = data.scale || 10000;
-
-    // Decodeer alle edges en voeg samen tot één grote array
-    // met null als separator tussen segmenten — dit is één SVG-pad
-    // in de DOM i.p.v. 196.000 losse elementen.
-    const allCoords = [];
-
-    for (const edge of data.edges) {
-      if (data.delta) {
-        let lat = edge[0] / scale;
-        let lon = edge[1] / scale;
-        allCoords.push([lat, lon]);
-        for (let i = 2; i < edge.length; i += 2) {
-          lat += edge[i]     / scale;
-          lon += edge[i + 1] / scale;
-          allCoords.push([lat, lon]);
-        }
-      } else {
-        for (const p of (edge.coords || edge)) {
-          allCoords.push([p[0], p[1]]);
-        }
-      }
-      allCoords.push(null); // scheidt segmenten
-    }
-
-    edgeLayer = L.polyline(allCoords, {
-      color: '#F8FAF8',
-      weight: 1.5,
-      opacity: 0.8,
-      interactive: false
-    });
-
-    edgesLoaded = true;
-    console.log(`${data.count} trajecten geladen`);
-    updateEdgeVisibility();
-  } catch (e) {
-    console.warn('edges.json fout:', e.message);
-  }
-}
-
-function updateEdgeVisibility() {
-  if (!edgesLoaded || !edgeLayer) return;
-  const zoom = map.getZoom();
-  if (zoom >= EDGE_ZOOM_THRESHOLD) {
-    if (!map.hasLayer(edgeLayer)) {
-      edgeLayer.addTo(map);
-      edgeLayer.bringToBack();
-    }
-  } else {
-    if (map.hasLayer(edgeLayer)) map.removeLayer(edgeLayer);
-  }
-}
-
-map.on('zoomend', updateEdgeVisibility);
-
 // ─── Status ───────────────────────────────────────────────
 function showStatus(msg, autohide = false) {
   const el = document.getElementById('status');
@@ -593,7 +527,6 @@ function updateNavBoard() {
 
 // ─── Start ────────────────────────────────────────────────
 loadAllNodes();
-loadEdges();
 locateUser();
 </script>
 </body>
