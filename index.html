@@ -2,12 +2,16 @@
 <html lang="nl">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="mobile-web-app-capable" content="yes">
 <title>Knooppunten</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css"/>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
+<script src="https://unpkg.com/feather-icons/dist/feather.min.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Afacad+Flux:wght@400;600;700;900&display=swap" rel="stylesheet">
@@ -22,6 +26,8 @@
   --green-dk: #006B1B;
   --surface:  rgba(26,26,26,0.96);
   --radius:   10px;
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bot: env(safe-area-inset-bottom, 0px);
 }
 
 *{box-sizing:border-box;margin:0;padding:0}
@@ -30,13 +36,16 @@ html,body{
   background:var(--dark);color:var(--white);
   font-family:'Afacad Flux',sans-serif;
 }
-#map{position:absolute;inset:0;bottom:68px}
+#map{position:absolute;inset:0;bottom:calc(68px + var(--safe-bot))}
 
 /* ── Route bar ─────────────────────────────────────────── */
 #route-bar{
-  position:absolute;bottom:0;left:0;right:0;height:68px;
+  position:absolute;bottom:0;left:0;right:0;
+  height:calc(68px + var(--safe-bot));
   background:var(--surface);border-top:2px solid rgba(255,122,0,0.25);
-  display:flex;align-items:center;gap:10px;padding:0 14px;
+  display:flex;align-items:center;gap:10px;
+  padding:0 14px;
+  padding-bottom:var(--safe-bot);
   z-index:1000;
 }
 #node-display{
@@ -93,13 +102,26 @@ html,body{
 
 /* ── Locate button ─────────────────────────────────────── */
 #locate-btn{
-  position:absolute;top:14px;left:14px;z-index:1001;
+  position:absolute;
+  top:calc(14px + var(--safe-top));
+  left:14px;z-index:1001;
   background:var(--surface);border:2px solid var(--orange);
   color:var(--orange);width:44px;height:44px;border-radius:var(--radius);
-  font-size:22px;cursor:pointer;display:flex;align-items:center;justify-content:center;
+  cursor:pointer;display:flex;align-items:center;justify-content:center;
   box-shadow:0 2px 12px rgba(0,0,0,0.3);transition:all 0.15s;
 }
 #locate-btn:hover{background:var(--orange);color:var(--white)}
+#locate-btn svg{width:20px;height:20px;stroke:var(--orange);transition:stroke 0.15s}
+#locate-btn:hover svg{stroke:var(--white)}
+
+/* ── Location dots (individuele node-locaties) ─────────── */
+.location-dot{
+  width:14px;height:14px;border-radius:50%;
+  background:var(--white);
+  border:1px solid var(--green);
+  box-shadow:none;
+  cursor:default;
+}
 
 /* ── Status toast ──────────────────────────────────────── */
 #status{
@@ -127,12 +149,6 @@ html,body{
 
 /* ── Leaflet overrides (lichte kaart) ─────────────────── */
 .leaflet-container{background:#f2efe9}
-.leaflet-control-zoom a{
-  background:var(--surface)!important;color:var(--white)!important;
-  border-color:#333!important;font-size:18px!important;
-  width:36px!important;height:36px!important;line-height:36px!important;
-}
-.leaflet-control-zoom a:hover{background:var(--orange)!important;border-color:var(--orange)!important}
 .leaflet-control-attribution{
   background:rgba(248,250,248,0.85)!important;
   color:var(--gray)!important;font-size:10px!important;
@@ -184,7 +200,9 @@ html,body{
 
 <div id="map"></div>
 
-<button id="locate-btn" onclick="locateUser()" title="Mijn locatie" aria-label="Mijn locatie">⊕</button>
+<button id="locate-btn" onclick="locateUser()" title="Mijn locatie" aria-label="Mijn locatie">
+  <i data-feather="crosshair"></i>
+</button>
 <div id="status" class="hidden">Laden...</div>
 
 <div id="nav-board">
@@ -219,7 +237,6 @@ L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r
   maxZoom: 19
 }).addTo(map);
 
-L.control.zoom({ position: 'bottomright' }).addTo(map);
 L.control.scale({ position: 'bottomright', imperial: false, maxWidth: 100 }).addTo(map);
 
 let userPos = null;
@@ -304,21 +321,26 @@ function setUserPos(latlng) {
   hideLoading();
 }
 
-// nodeCache: id -> { node: {id, lat, lon, tags}, marker: L.Marker|null }
+// nodeCache: ref -> { node: {ref, lat, lon, locations, tags}, marker: L.Marker|null }
 const nodeCache = new Map();
 let nodesReady = false;
 
 // ─── Data laden uit nodes.json ────────────────────────────
 async function loadAllNodes() {
-  showStatus('Knooppunten laden...');
   try {
     const res = await fetch('./nodes.json');
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
 
     data.nodes.forEach(n => {
-      nodeCache.set(n.id, {
-        node: { id: n.id, lat: n.lat, lon: n.lon, tags: { rcn_ref: n.ref } },
+      nodeCache.set(n.ref, {
+        node: {
+          ref: n.ref,
+          lat: n.lat,
+          lon: n.lon,
+          locations: n.locations || [{ lat: n.lat, lon: n.lon }],
+          tags: { rcn_ref: n.ref }
+        },
         marker: null
       });
     });
@@ -326,7 +348,6 @@ async function loadAllNodes() {
     nodesReady = true;
     const date = new Date(data.generated).toLocaleDateString('nl-NL');
     console.log(`${data.count} knooppunten geladen (gegenereerd: ${date})`);
-    showStatus(`${data.count} knooppunten geladen`, true);
     renderAllNodes();
   } catch (e) {
     showStatus('nodes.json niet gevonden — zet het bestand naast index.html', true);
@@ -342,6 +363,52 @@ function renderAllNodes() {
     }
   });
 }
+
+// ─── Location dots (individuele OSM-node locaties) ────────
+const DOT_ZOOM_THRESHOLD = 13;
+const dotCache = new Map(); // nodeId -> [L.Marker, ...]
+let dotsVisible = false;
+
+function createLocationDots(node) {
+  if (!node.locations || node.locations.length <= 1) return [];
+  return node.locations.map(loc => {
+    const icon = L.divIcon({
+      html: '<div class="location-dot"></div>',
+      className: '',
+      iconAnchor: [7, 7],
+      iconSize: [14, 14]
+    });
+    return L.marker([loc.lat, loc.lon], { icon, interactive: false, zIndexOffset: -100 }).addTo(map);
+  });
+}
+
+function showLocationDots() {
+  if (dotsVisible) return;
+  dotsVisible = true;
+  nodeCache.forEach((entry, id) => {
+    if (!dotCache.has(id)) {
+      const dots = createLocationDots(entry.node);
+      dotCache.set(id, dots);
+    }
+  });
+}
+
+function hideLocationDots() {
+  if (!dotsVisible) return;
+  dotsVisible = false;
+  dotCache.forEach(dots => dots.forEach(d => map.removeLayer(d)));
+  dotCache.clear();
+}
+
+function updateDotVisibility() {
+  if (map.getZoom() >= DOT_ZOOM_THRESHOLD) {
+    showLocationDots();
+  } else {
+    hideLocationDots();
+  }
+}
+
+map.on('zoomend', updateDotVisibility);
 
 function haversine([lat1, lon1], [lat2, lon2]) {
   const R = 6371e3;
@@ -379,7 +446,7 @@ function markerHtml(nr, isSelected) {
 
 function createNodeMarker(node) {
   const nr = node.tags.rcn_ref;
-  const isSelected = selectedNodes.some(s => s.id === node.id);
+  const isSelected = selectedNodes.some(s => s.ref === node.ref);
   const icon = L.divIcon({
     html: markerHtml(nr, isSelected),
     className: '',
@@ -392,11 +459,11 @@ function createNodeMarker(node) {
   return m;
 }
 
-function updateMarkerStyle(marker, nodeId) {
-  const entry = nodeCache.get(nodeId);
+function updateMarkerStyle(marker, nodeRef) {
+  const entry = nodeCache.get(nodeRef);
   if (!entry) return;
   const nr = entry.node.tags.rcn_ref;
-  const isSelected = selectedNodes.some(s => s.id === nodeId);
+  const isSelected = selectedNodes.some(s => s.ref === nodeRef);
   marker.setIcon(L.divIcon({
     html: markerHtml(nr, isSelected),
     className: '',
@@ -406,14 +473,14 @@ function updateMarkerStyle(marker, nodeId) {
 }
 
 function refreshAllMarkerStyles() {
-  nodeCache.forEach((entry, id) => {
-    if (entry.marker) updateMarkerStyle(entry.marker, id);
+  nodeCache.forEach((entry, ref) => {
+    if (entry.marker) updateMarkerStyle(entry.marker, ref);
   });
 }
 
 // ─── Selectie & routing ───────────────────────────────────
 async function selectNode(node) {
-  if (selectedNodes.some(s => s.id === node.id)) return;
+  if (selectedNodes.some(s => s.ref === node.ref)) return;
 
   const prev = selectedNodes.length > 0 ? selectedNodes[selectedNodes.length - 1] : null;
   selectedNodes.push(node);
@@ -526,6 +593,7 @@ function updateNavBoard() {
 }
 
 // ─── Start ────────────────────────────────────────────────
+feather.replace({ 'stroke-width': 2 });
 loadAllNodes();
 locateUser();
 </script>
