@@ -114,15 +114,6 @@ html,body{
 #locate-btn svg{width:20px;height:20px;stroke:var(--orange);transition:stroke 0.15s}
 #locate-btn:hover svg{stroke:var(--white)}
 
-/* ── Location dots (individuele node-locaties) ─────────── */
-.location-dot{
-  width:14px;height:14px;border-radius:50%;
-  background:var(--white);
-  border:1px solid var(--green);
-  box-shadow:none;
-  cursor:default;
-}
-
 /* ── Status toast ──────────────────────────────────────── */
 #status{
   position:absolute;top:14px;left:50%;transform:translateX(-50%);
@@ -365,52 +356,6 @@ function renderAllNodes() {
     }
   });
 }
-
-// ─── Location dots (individuele OSM-node locaties) ────────
-const DOT_ZOOM_THRESHOLD = 13;
-const dotCache = new Map(); // nodeId -> [L.Marker, ...]
-let dotsVisible = false;
-
-function createLocationDots(node) {
-  if (!node.locations || node.locations.length <= 1) return [];
-  return node.locations.map(loc => {
-    const icon = L.divIcon({
-      html: '<div class="location-dot"></div>',
-      className: '',
-      iconAnchor: [7, 7],
-      iconSize: [14, 14]
-    });
-    return L.marker([loc.lat, loc.lon], { icon, interactive: false, zIndexOffset: -100 }).addTo(map);
-  });
-}
-
-function showLocationDots() {
-  if (dotsVisible) return;
-  dotsVisible = true;
-  nodeCache.forEach((entry, key) => {
-    if (!dotCache.has(key)) {
-      const dots = createLocationDots(entry.node);
-      dotCache.set(key, dots);
-    }
-  });
-}
-
-function hideLocationDots() {
-  if (!dotsVisible) return;
-  dotsVisible = false;
-  dotCache.forEach(dots => dots.forEach(d => map.removeLayer(d)));
-  dotCache.clear();
-}
-
-function updateDotVisibility() {
-  if (map.getZoom() >= DOT_ZOOM_THRESHOLD) {
-    showLocationDots();
-  } else {
-    hideLocationDots();
-  }
-}
-
-map.on('zoomend', updateDotVisibility);
 
 function haversine([lat1, lon1], [lat2, lon2]) {
   const R = 6371e3;
