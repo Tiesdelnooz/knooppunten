@@ -321,7 +321,7 @@ function setUserPos(latlng) {
   hideLoading();
 }
 
-// nodeCache: ref -> { node: {ref, lat, lon, locations, tags}, marker: L.Marker|null }
+// nodeCache: "ref_lat_lon" -> { node, marker }
 const nodeCache = new Map();
 let nodesReady = false;
 
@@ -333,8 +333,10 @@ async function loadAllNodes() {
     const data = await res.json();
 
     data.nodes.forEach(n => {
-      nodeCache.set(n.ref, {
+      const key = `${n.ref}_${n.lat}_${n.lon}`;
+      nodeCache.set(key, {
         node: {
+          key,
           ref: n.ref,
           lat: n.lat,
           lon: n.lon,
@@ -385,10 +387,10 @@ function createLocationDots(node) {
 function showLocationDots() {
   if (dotsVisible) return;
   dotsVisible = true;
-  nodeCache.forEach((entry, id) => {
-    if (!dotCache.has(id)) {
+  nodeCache.forEach((entry, key) => {
+    if (!dotCache.has(key)) {
       const dots = createLocationDots(entry.node);
-      dotCache.set(id, dots);
+      dotCache.set(key, dots);
     }
   });
 }
@@ -446,7 +448,7 @@ function markerHtml(nr, isSelected) {
 
 function createNodeMarker(node) {
   const nr = node.tags.rcn_ref;
-  const isSelected = selectedNodes.some(s => s.ref === node.ref);
+  const isSelected = selectedNodes.some(s => s.key === node.key);
   const icon = L.divIcon({
     html: markerHtml(nr, isSelected),
     className: '',
@@ -459,11 +461,11 @@ function createNodeMarker(node) {
   return m;
 }
 
-function updateMarkerStyle(marker, nodeRef) {
-  const entry = nodeCache.get(nodeRef);
+function updateMarkerStyle(marker, nodeKey) {
+  const entry = nodeCache.get(nodeKey);
   if (!entry) return;
   const nr = entry.node.tags.rcn_ref;
-  const isSelected = selectedNodes.some(s => s.ref === nodeRef);
+  const isSelected = selectedNodes.some(s => s.key === nodeKey);
   marker.setIcon(L.divIcon({
     html: markerHtml(nr, isSelected),
     className: '',
@@ -473,14 +475,14 @@ function updateMarkerStyle(marker, nodeRef) {
 }
 
 function refreshAllMarkerStyles() {
-  nodeCache.forEach((entry, ref) => {
-    if (entry.marker) updateMarkerStyle(entry.marker, ref);
+  nodeCache.forEach((entry, key) => {
+    if (entry.marker) updateMarkerStyle(entry.marker, key);
   });
 }
 
 // ─── Selectie & routing ───────────────────────────────────
 async function selectNode(node) {
-  if (selectedNodes.some(s => s.ref === node.ref)) return;
+  if (selectedNodes.some(s => s.key === node.key)) return;
 
   const prev = selectedNodes.length > 0 ? selectedNodes[selectedNodes.length - 1] : null;
   selectedNodes.push(node);
