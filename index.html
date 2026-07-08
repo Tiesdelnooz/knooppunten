@@ -44,7 +44,8 @@ html,body{height:100%;overflow:hidden;background:var(--white);color:var(--white)
   z-index:1000;
   transform:translateY(100%);
   transition:transform 0.25s ease;
-  padding-bottom:var(--safe-bot);
+  /* Alleen helft van safe-area gebruiken — voorkomt te veel witruimte op iPhone */
+  padding-bottom:calc(env(safe-area-inset-bottom, 0px) / 2);
 }
 #route-summary.visible{transform:translateY(0)}
 
