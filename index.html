@@ -27,40 +27,47 @@
   --radius:  10px;
   --safe-top: env(safe-area-inset-top, 0px);
   --safe-bot: env(safe-area-inset-bottom, 0px);
-  --summary-h: 0px; /* wordt via JS gezet als summary zichtbaar is */
+  --summary-h: 0px;
 }
 *{box-sizing:border-box;margin:0;padding:0}
 html,body{height:100%;overflow:hidden;background:var(--white);color:var(--white);font-family:'Afacad Flux',sans-serif}
 
-#map{position:absolute;inset:0;bottom:var(--summary-h);transition:bottom 0.25s ease}
+#map{position:absolute;inset:0;top:var(--summary-h);transition:top 0.25s ease}
 
-/* ── Route summary ─────────────────────────────────────── */
+/* ── Route summary (top) ───────────────────────────────── */
 #route-summary{
-  position:absolute;bottom:0;left:0;right:0;
+  position:absolute;
+  top:calc(var(--safe-top) + 0px);
+  left:0;right:0;
   background:var(--white);
-  border-top-left-radius:16px;
-  border-top-right-radius:16px;
-  box-shadow:0 -4px 24px rgba(0,0,0,0.12);
-  z-index:1000;
-  transform:translateY(100%);
-  transition:transform 0.25s ease;
-  /* Alleen helft van safe-area gebruiken — voorkomt te veel witruimte op iPhone */
-  padding-bottom:calc(env(safe-area-inset-bottom, 0px) / 2);
+  border-bottom-left-radius:16px;
+  border-bottom-right-radius:16px;
+  box-shadow:0 4px 24px rgba(0,0,0,0.12);
+  z-index:1001;
+  overflow:hidden;
 }
-#route-summary.visible{transform:translateY(0)}
 
 #summary-stats{
   display:flex;align-items:center;justify-content:center;
-  padding:14px 16px 10px;
+  padding:calc(var(--safe-top) + 10px) 16px 10px;
   font-size:18px;font-weight:700;color:var(--dark);
   letter-spacing:0.2px;
+  min-height:calc(var(--safe-top) + 48px);
 }
+/* Verborgen wanneer geen nodes geselecteerd */
+#summary-stats.empty{color:var(--gray);font-size:14px;font-weight:600}
 
 #summary-chips{
   display:flex;align-items:center;
-  padding:4px 20px 20px;
+  padding:0 20px 16px;
   overflow-x:auto;scrollbar-width:none;
-  gap:0;
+  max-height:0;
+  overflow-y:hidden;
+  transition:max-height 0.25s ease, padding 0.25s ease;
+}
+#summary-chips.expanded{
+  max-height:80px;
+  padding:4px 20px 16px;
 }
 #summary-chips::-webkit-scrollbar{display:none}
 
@@ -90,8 +97,8 @@ html,body{height:100%;overflow:hidden;background:var(--white);color:var(--white)
 /* ── Locate button ─────────────────────────────────────── */
 #locate-btn{
   position:absolute;
-  top:calc(14px + var(--safe-top));
-  left:14px;z-index:1001;
+  bottom:calc(24px + var(--safe-bot));
+  right:14px;z-index:1001;
   background:var(--white);border:none;
   color:var(--green);width:44px;height:44px;border-radius:999px;
   cursor:pointer;display:flex;align-items:center;justify-content:center;
@@ -103,7 +110,7 @@ html,body{height:100%;overflow:hidden;background:var(--white);color:var(--white)
 
 /* ── Status toast ──────────────────────────────────────── */
 #status{
-  position:absolute;top:calc(14px + var(--safe-top));left:50%;transform:translateX(-50%);
+  position:absolute;top:calc(var(--summary-h) + 12px);left:50%;transform:translateX(-50%);
   z-index:1002;background:var(--surface);border:1.5px solid rgba(255,122,0,0.4);
   border-radius:8px;padding:9px 20px;font-size:13px;color:var(--white);
   font-weight:600;pointer-events:none;transition:opacity 0.4s;
@@ -413,28 +420,28 @@ function updateSummary() {
   const label   = document.getElementById('stat-label');
 
   if (selectedNodes.length === 0) {
-    summary.classList.remove('visible');
-    document.documentElement.style.setProperty('--summary-h', '0px');
-    return;
+    label.textContent = '';
+    label.parentElement.classList.add('empty');
+    chips.classList.remove('expanded');
+  } else {
+    label.textContent = `${selectedNodes.length} nodes | ${fmtDist(totalDistance)}`;
+    label.parentElement.classList.remove('empty');
+
+    chips.innerHTML = selectedNodes.map((n, i) => {
+      const isLast = i === selectedNodes.length - 1;
+      const line   = !isLast ? '<div class="chip-line"></div>' : '';
+      return `<div class="chip-wrap">
+        <div class="node-chip${isLast ? ' last' : ''}"
+             onclick="deselectIfLast(selectedNodes[${i}])">${n.ref}</div>
+        ${line}
+      </div>`;
+    }).join('');
+
+    chips.scrollLeft = chips.scrollWidth;
+    chips.classList.add('expanded');
   }
 
-  // Stats
-  label.textContent = `${selectedNodes.length} nodes | ${fmtDist(totalDistance)}`;
-
-  // Chips met oranje verbindingslijnen
-  chips.innerHTML = selectedNodes.map((n, i) => {
-    const isLast = i === selectedNodes.length - 1;
-    const line   = !isLast ? '<div class="chip-line"></div>' : '';
-    return `<div class="chip-wrap">
-      <div class="node-chip${isLast ? ' last' : ''}"
-           onclick="deselectIfLast(selectedNodes[${i}])">${n.ref}</div>
-      ${line}
-    </div>`;
-  }).join('');
-
-  chips.scrollLeft = chips.scrollWidth;
-
-  summary.classList.add('visible');
+  // Kaart top aanpassen aan hoogte van summary
   requestAnimationFrame(() => {
     const h = summary.offsetHeight;
     document.documentElement.style.setProperty('--summary-h', h + 'px');
@@ -443,6 +450,7 @@ function updateSummary() {
 
 // ─── Start ────────────────────────────────────────────────
 feather.replace({ 'stroke-width': 2 });
+updateSummary();
 loadAllNodes();
 locateUser();
 </script>
