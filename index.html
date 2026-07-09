@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="mobile-web-app-capable" content="yes">
 <title>Knooppunten</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
@@ -25,21 +25,29 @@
   --dark:    #1A1A1A;
   --surface: rgba(26,26,26,0.96);
   --radius:  10px;
-  --safe-top: env(safe-area-inset-top, 0px);
-  --safe-bot: env(safe-area-inset-bottom, 0px);
   --summary-h: 0px;
 }
 *{box-sizing:border-box;margin:0;padding:0}
-html,body{height:100%;overflow:hidden;background:var(--white);color:var(--white);font-family:'Afacad Flux',sans-serif}
+html,body{
+  height:100%;min-height:100dvh;overflow:hidden;
+  background:#F8FAF8;
+  font-family:'Afacad Flux',sans-serif;
+}
 
-#map{position:absolute;inset:0;top:var(--summary-h);transition:top 0.25s ease}
+/* Kaart vult het volledige scherm — inclusief achter iOS URL-balk */
+#map{
+  position:absolute;
+  top:var(--summary-h);
+  left:0;right:0;
+  height:100dvh;
+  transition:top 0.25s ease;
+}
 
 /* ── Route summary (top) ───────────────────────────────── */
 #route-summary{
   position:absolute;
-  top:calc(var(--safe-top) + 0px);
-  left:0;right:0;
-  background:var(--white);
+  top:0;left:0;right:0;
+  background:#F8FAF8;
   border-bottom-left-radius:16px;
   border-bottom-right-radius:16px;
   box-shadow:0 4px 24px rgba(0,0,0,0.12);
@@ -47,27 +55,28 @@ html,body{height:100%;overflow:hidden;background:var(--white);color:var(--white)
   overflow:hidden;
 }
 
+/* Stats rij: safe-area padding alleen hier, één keer */
 #summary-stats{
   display:flex;align-items:center;justify-content:center;
-  padding:calc(var(--safe-top) + 10px) 16px 10px;
+  padding-top:calc(env(safe-area-inset-top, 0px) + 12px);
+  padding-bottom:12px;
+  padding-left:16px;padding-right:16px;
   font-size:18px;font-weight:700;color:var(--dark);
   letter-spacing:0.2px;
-  min-height:calc(var(--safe-top) + 48px);
 }
-/* Verborgen wanneer geen nodes geselecteerd */
 #summary-stats.empty{color:var(--gray);font-size:14px;font-weight:600}
 
 #summary-chips{
   display:flex;align-items:center;
-  padding:0 20px 16px;
+  padding-left:20px;padding-right:20px;
   overflow-x:auto;scrollbar-width:none;
-  max-height:0;
-  overflow-y:hidden;
-  transition:max-height 0.25s ease, padding 0.25s ease;
+  max-height:0;overflow-y:hidden;
+  padding-bottom:0;
+  transition:max-height 0.25s ease, padding-bottom 0.25s ease;
 }
 #summary-chips.expanded{
   max-height:80px;
-  padding:4px 20px 16px;
+  padding-bottom:16px;
 }
 #summary-chips::-webkit-scrollbar{display:none}
 
@@ -97,16 +106,16 @@ html,body{height:100%;overflow:hidden;background:var(--white);color:var(--white)
 /* ── Locate button ─────────────────────────────────────── */
 #locate-btn{
   position:absolute;
-  bottom:calc(24px + var(--safe-bot));
+  bottom:32px;
   right:14px;z-index:1001;
-  background:var(--white);border:none;
+  background:#F8FAF8;border:none;
   color:var(--green);width:44px;height:44px;border-radius:999px;
   cursor:pointer;display:flex;align-items:center;justify-content:center;
   box-shadow:0 2px 12px rgba(0,0,0,0.2);transition:all 0.15s;
 }
 #locate-btn svg{width:20px;height:20px;stroke:var(--green)}
 #locate-btn:hover{background:var(--green)}
-#locate-btn:hover svg{stroke:var(--white)}
+#locate-btn:hover svg{stroke:#F8FAF8}
 
 /* ── Status toast ──────────────────────────────────────── */
 #status{
